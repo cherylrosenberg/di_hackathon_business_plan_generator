@@ -81,44 +81,63 @@ def generate_section(section_key: str) -> str:
         return response.choices[0].message.content.strip()
 
     except groq.AuthenticationError:
-        print("Invalid GROQ_API_KEY. Check your .env file.")
-        sys.exit(1)
+        raise
     except groq.APIConnectionError:
-        print("Could not reach Groq API. Check your internet connection.")
-        sys.exit(1)
+        raise
     except Exception as e:
         print(f"  Error generating {section_key}: {e} — skipping.")
         return ""
 
 
+def generate_and_store_section(section_key: str, *, sleep_after: bool = True) -> None:
+    """Generate one section into ``generated_sections`` (Groq + optional rate-limit sleep)."""
+    section_name = section_key.replace("_", " ").title()
+    print(f"  Generating: {section_name}...", end=" ", flush=True)
+
+    try:
+        prose = generate_section(section_key)
+    except groq.AuthenticationError:
+        print("Invalid GROQ_API_KEY. Check your .env file.")
+        raise
+    except groq.APIConnectionError:
+        print("Could not reach Groq API. Check your internet connection.")
+        raise
+
+    if prose:
+        generated_sections[section_key] = prose
+        print("Done")
+    else:
+        generated_sections[section_key] = (
+            f"*[This section could not be generated automatically. "
+            f"Please write the {section_name} manually.]*"
+        )
+        print("Failed — placeholder inserted")
+
+    if sleep_after:
+        time.sleep(5)
+
+
+def finalize_plan_outputs() -> None:
+    """Advance workflow when the plan is complete and write ``business_plan.md``."""
+    advance_workflow(workflow_state, business_info, generated_sections)
+    print()
+    render_and_save()
+
+
 def generate_plan() -> None:
     """Generate all business plan sections one at a time."""
-    _load_business_info()
+    if not load_business_info():
+        print("No interview data found. Run question_asker.py first.")
+        sys.exit(1)
 
     workflow_state["phase"] = "generating"
     print("\n=== Generating Business Plan ===\n")
 
-    for section_key in SECTION_DESCRIPTIONS:
-        section_name = section_key.replace("_", " ").title()
-        print(f"  Generating: {section_name}...", end=" ", flush=True)
+    keys = list(SECTION_DESCRIPTIONS.keys())
+    for i, section_key in enumerate(keys):
+        generate_and_store_section(section_key, sleep_after=i < len(keys) - 1)
 
-        prose = generate_section(section_key)
-
-        if prose:
-            generated_sections[section_key] = prose
-            print("Done")
-        else:
-            generated_sections[section_key] = (
-                f"*[This section could not be generated automatically. "
-                f"Please write the {section_name} manually.]*"
-            )
-            print("Failed — placeholder inserted")
-
-        time.sleep(5)
-
-    advance_workflow(workflow_state, business_info, generated_sections)
-    print()
-    render_and_save()
+    finalize_plan_outputs()
 
 
 def render_and_save(output_path: str = "business_plan.md") -> None:
@@ -137,21 +156,21 @@ def render_and_save(output_path: str = "business_plan.md") -> None:
 # Internal helpers
 # =====================================================================
 
-def _load_business_info() -> None:
-    """Load interview answers from JSON if business_info is empty.
+def load_business_info() -> bool:
+    """Load interview answers from JSON if ``business_info`` is still empty.
 
-    Allows plan_generator.py to run standalone after question_asker.py
-    has saved business_info.json. When called from main.py in the same
-    process, business_info is already populated and this is a no-op.
+    Returns True if ``business_info`` has at least one non-empty value after the call,
+    or was already populated. Returns False if data was required from disk but missing.
     """
     if all(v == "" for v in business_info.values()):
         if not JSON_INPUT_PATH.exists():
-            print("No interview data found. Run question_asker.py first.")
-            sys.exit(1)
+            return False
 
         data = json.loads(JSON_INPUT_PATH.read_text(encoding="utf-8"))
         business_info.update(data)
         print(f"Loaded interview data from {JSON_INPUT_PATH}")
+
+    return not all(v == "" for v in business_info.values())
 
 
 # =====================================================================

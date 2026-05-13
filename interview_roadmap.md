@@ -49,6 +49,18 @@ Avoid jargon-heavy phrasing. If a field might confuse a first-time founder (e.g.
 ### Validate briefly, don't over-interrogate
 If a response is vague or too short to be useful in a business plan, ask **one** follow-up for more detail. If the user insists, accept the answer and move on. This is an MVP, not a due-diligence interview.
 
+When the app generates that follow-up via `evaluate_answer` in `question_asker.py`, it must stay on **the same field** as the question being validated (rephrase, narrow, or add examples for that topic only)—never redirect the user to a different interview field (e.g. do not ask about business idea or problem when the current step is target market).
+
+### Prior answers in later questions (runtime)
+At question generation time, `question_asker.py` may inject a **read-only** summary of answers for fields **already collected** (same order as `required_fields` in `business_info_schema.py`; only fields strictly *before* the current field).
+
+- Each prior answer is **truncated per field** in code to cap prompt size; this is not the full unbounded transcript.
+- The question LLM may add **at most** one short acknowledgment **only when** prior text **already answers or partially answers the current field's intent**—not merely because it is thematically related to the business (e.g. do not pull target-audience or product-positioning lines from `business_idea` into a **problem_solved** question unless that text explicitly states the pain or gap).
+- If relevance is **uncertain**, the model should **not** reference prior answers and should ask a normal standalone question instead.
+- **No long verbatim quotes** from prior answers; at most a **brief paraphrase** (on the order of eight words or fewer), or no acknowledgment.
+- The model must **not** invent facts that are not in the injected block or in the field description.
+- This injection does **not** copy or infer values into other `business_info` keys; each reply is still stored only under the field currently being asked (same as **Do NOT extract multiple fields from one answer**).
+
 ### Determine when collection is complete
 The interview is finished when `is_interview_complete(business_info)` returns `True`. At that point:
 1. Summarise the collected information back to the user.
@@ -59,7 +71,8 @@ The interview is finished when `is_interview_complete(business_info)` returns `T
 
 ## Integration Notes
 
-- This document will be injected into the LLM system prompt as grounding context.
+- This document is injected into the question LLM **system** prompt as grounding context (conversation rules + per-field table blurbs), loaded from disk at runtime by `question_asker.py`.
+- When there are prior answers for earlier fields, the same system prompt also includes a **bounded prior-answers block** (see **Prior answers in later questions (runtime)** above), with **strict rules** so acknowledgments only occur when prior text already addresses the current field's intent; omitted entirely for the first field or when no prior fields are filled.
 - The assistant should reference `business_info_schema.py` at runtime to know which fields remain empty.
 - Use `FIELD_DESCRIPTIONS[field]` in the prompt so the LLM understands what information to collect.
 - Use `get_next_field(business_info)` to pick the next question — do not let the LLM decide field order.
